@@ -1,0 +1,188 @@
+---
+title: "Data Product Presentation"
+author: "WR"
+date: "4/29/2020"
+output:
+  ioslides_presentation: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, include=FALSE}
+#load libraries
+library(leaflet)
+
+library(plotly)
+
+library(dplyr)
+
+library(htmlTable)
+```
+
+```{r, include=FALSE}
+# read coronavirus data
+covid_global <- read.csv("./Data/time_series_covid19_confirmed_global_iso3_regions.csv", stringsAsFactors = FALSE)
+covid_us <- read.csv("./Data/time_series_covid19_confirmed_US.csv", stringsAsFactors = FALSE)
+
+covid_global <- covid_global[-1,]
+drop <- c("Region.Code","Region.Name","Sub.region.Code","Sub.region.Name","Intermediate.Region.Code","Intermediate.Region.Name")
+covid_global <- covid_global[,!colnames(covid_global)%in%drop]
+colnames(covid_global) <- covid_global %>%
+    rename("iso3"="ISO.3166.1.Alpha.3.Codes") %>%
+    colnames()
+
+# replace province.state column with the country.region value if it's blank
+blanks <- covid_global$Province.State==""
+covid_global$Province.State[blanks] <- covid_global$Country.Region[blanks]
+colnames(covid_global) <- tolower(colnames(covid_global))
+covid_global[,"lat"]<- as.numeric(covid_global[,"lat"])
+covid_global[,"long"]<- as.numeric(covid_global[,"long"])
+agg_covid_global <- covid_global[,-c(2)]
+
+drop <- c("UID","iso2","code3","FIPS","Admin2","Combined_Key")
+covid_us <- covid_us[,!colnames(covid_us)%in%drop]
+colnames(covid_us) <- covid_us %>%
+    rename("Province.State"="Province_State","Country.Region"="Country_Region","Long"="Long_") %>%
+    colnames()
+colnames(covid_us) <- tolower(colnames(covid_us))
+agg_covid_us_1 <- aggregate(covid_us[,-c(1,2,3,4,5)], by=list(covid_us$iso3,covid_us$province.state), FUN = sum, na.rm=TRUE)
+agg_covid_us_2 <- aggregate(covid_us[,-c(1,2,3,6:95)],by=list(covid_us$iso3,covid_us$province.state), FUN=mean,na.rm=TRUE) 
+agg_covid_us<- merge(agg_covid_us_1,agg_covid_us_2,by=c("Group.1","Group.2"), all.x = TRUE)
+colnames(agg_covid_us) <- agg_covid_us %>%
+    rename("iso3"="Group.1","province.state"="Group.2") %>%
+    colnames()
+
+# merge covid_global and covid_us into one
+agg_covid_global <- agg_covid_global[-which(agg_covid_global$province.state=="US"),]
+covid <- rbind(agg_covid_global,agg_covid_us)
+
+# format date column names
+cols <- sub('x','',colnames(covid)[-c(1:3,94)])
+colnames(covid)[-c(1:3,94)]  <- format(as.Date(cols,format="%m.%d.%y"),"x%m.%d.%y")
+
+# remove data related to "Diamond Princess", cases = -1
+covid <- covid[which(covid$province.state!="Diamond Princess"),]
+
+covid$logcases <- log(covid$x04.20.20+1)
+```
+
+## Motivation 
+
+- **Question**
+
+  + Is the spread of coronavirus influenced by the climate? Are warmer and sunnier places less likely to be influenced by the virus?
+
+- **Method**
+
+  + Use latitude as a proxy for climate
+
+  + Explore the relationship between latitude and reported cases using simple regression models
+
+## <span style="font-size:30px;">Confirmed Cases by April 20, 2020</span>
+<div style="margin-top:-20px">
+```{r, echo=FALSE, message=FALSE}
+d<-"x04.20.20"
+nonzeros <- covid[which(covid[,c(d)]!=0),]
+cases <- nonzeros[,c(d)]
+nonzeros %>%
+    leaflet() %>%
+    addTiles() %>%
+    addCircles(weight=0,radius=cases*5,color="red",
+               label=paste(nonzeros$province.state,":",
+               format(cases,big.mark = ",")), 
+               fillOpacity = 0.5)
+```
+</div>
+<span style="font-size:12px">Data Source: CSSE at Johns Hopkins University</span><br/> <span style="font-size:12px">[time_series_covid19_confirmed_US.csv](https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data/csse_covid_19_time_series),
+[time_series_covid19_confirmed_global_iso3_regions.csv](https://data.humdata.org/dataset/novel-coronavirus-2019-ncov-cases)</span>
+
+## <span style="font-size:25px; margin-top:-20px">Simple Linear Model: *confirmed cases = a + b \* latitude* </span>
+<div style="font-size:15px; margin-top:-30px">
+```{r, echo=FALSE, message=FALSE}
+modLinear <- lm(x04.20.20 ~ lat,data=covid)
+m <- summary(modLinear)$coef
+rownames(m)[2] <- "Latitude"
+colnames(m)[3] <- "t"
+colnames(m)[4] <- "P"
+m[,c(1,2,3)] <- round(m[,c(1,2,3)],2)
+m[,c(4)] <- format(m[,c(4)],format="e",digit=2)
+m %>% htmlTable(css.cell = "padding-left: .8em; padding-right: .2em")
+```
+</div><div class="columns-2">
+<div style="float:left;width:50%;">
+```{r, echo=FALSE, message=FALSE, fig.width = 4, fig.height = 4}
+ft <- list(
+            family = "Courier New, monospace",
+            size = 15,
+            color = "#7f7f7f"
+        )
+x <- list(
+            title = "Latitude",
+            titlefont=ft
+        )
+y <- list(
+                title = "Confirmed Coronavirus Cases",
+                titlefont=ft
+            )
+f <- plot_ly(covid, x=covid$lat, y=covid$x04.20.20, 
+                         text=covid$province.state, name="data",
+                         color = I("red"))
+f <- f %>% add_markers()
+f <- f %>% layout(xaxis = x, yaxis = y)
+f <- f %>% add_trace(y=fitted(modLinear), mode="lines", name="fitted")
+f
+```
+</div><div style="float:left;width:100%;">
+```{r, echo=FALSE, message=FALSE, fig.width = 4, fig.height = 4}
+plot(modLinear, which=2)
+```
+</div></div>
+
+## <span style="font-size:25px; margin-top:-20px">Simple Log-linear Model: *log(confirmed cases) = a + b \* latitude* </span>
+<div style="font-size:15px; margin-top:-30px">
+```{r, echo=FALSE, message=FALSE}
+modLinear <- modLoglinear <- lm(logcases ~ lat,data=covid)
+m <- summary(modLoglinear)$coef
+rownames(m)[2] <- "Latitude"
+colnames(m)[3] <- "t"
+colnames(m)[4] <- "P"
+m[,c(1,2,3)] <- round(m[,c(1,2,3)],2)
+m[,c(4)] <- format(m[,c(4)],format="e",digit=2)
+m %>% htmlTable(css.cell = "padding-left: .8em; padding-right: .2em")
+```
+</div><div class="columns-2">
+<div style="float:left;width:50%;">
+```{r, echo=FALSE, message=FALSE, fig.width = 4, fig.height = 4}
+ft <- list(
+            family = "Courier New, monospace",
+            size = 15,
+            color = "#7f7f7f"
+        )
+x <- list(
+            title = "Latitude",
+            titlefont=ft
+        )
+y <- list(
+                title = "Log of Confirmed Coronavirus Cases",
+                titlefont=ft
+        )
+f <- plot_ly(covid, x=covid$lat, y=covid$logcases, 
+text=covid$province.state,name="data",
+color = I("red"))
+f <- f %>% add_markers()
+f <- f %>% layout(xaxis = x, yaxis = y)
+f <- f %>% add_trace(y=fitted(modLoglinear), mode="lines", name="fitted")
+f
+```
+</div><div style="float:left;width:100%;">
+```{r, echo=FALSE, message=FALSE, fig.width = 4, fig.height = 4}
+plot(modLoglinear, which=2)
+```
+</div></div>
+
+## Conclusion
+
+The regression result shows the number of confirmed coronavirus cases is significantly influenced by the latitude. A one-unit increase in latitude multiplies the expected value of the number of confirmed cases by 1.04(e^0.04). The effect is significant, with a p value much less than 0.05, though it's a minor influence in terms of the magnitude. In addition, the model is too simple to well explain the effect of climate on the spread of coronavirus cases, in next steps, more variables should be considered and included into the model.
+
